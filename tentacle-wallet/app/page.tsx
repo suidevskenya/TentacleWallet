@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Eye, 
   EyeOff, 
@@ -19,8 +19,12 @@ import {
   Shield,
   LogOut,
   User,
-  CreditCard
+  CreditCard,
+  Copy,
+  RefreshCw,
+  Wallet
 } from 'lucide-react';
+import { getFullnodeUrl, SuiClient, Ed25519Keypair, TransactionBlock } from '@mysten/sui';
 
 // Custom Octopus Icon Component
 const OctopusIcon = ({ className = "w-6 h-6" }) => (
@@ -29,20 +33,148 @@ const OctopusIcon = ({ className = "w-6 h-6" }) => (
   </svg>
 );
 
-export default function CryptoWalletUI() {
+// Use testnet for development, mainnet for production
+const rpcUrl = getFullnodeUrl('testnet');
+const client = new SuiClient({ url: rpcUrl });
+
+export default function SuiWalletUI() {
   const [balanceVisible, setBalanceVisible] = useState(true);
   const [activeTab, setActiveTab] = useState('Home');
   const [menuOpen, setMenuOpen] = useState(false);
   const [currentView, setCurrentView] = useState('home');
   const [suiBalance, setSuiBalance] = useState(0);
   const [dollarBalance, setDollarBalance] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  
+  // Wallet state
+  const [keypair, setKeypair] = useState<Ed25519Keypair | null>(null);
+  const [address, setAddress] = useState('');
+  const [showCreateWallet, setShowCreateWallet] = useState(false);
+  const [showImportWallet, setShowImportWallet] = useState(false);
+  const [mnemonicInput, setMnemonicInput] = useState('');
+  const [showMnemonic, setShowMnemonic] = useState(false);
+  const [generatedMnemonic, setGeneratedMnemonic] = useState('');
+
   type Transaction = {
     description: string;
     date: string;
     amount: string;
     currency: string;
+    digest?: string;
   };
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+
+  // Initialize wallet on component mount
+  useEffect(() => {
+    const savedKeypair = localStorage.getItem('sui_wallet_keypair');
+    if (savedKeypair) {
+      try {
+        const keypairData = JSON.parse(savedKeypair);
+        const restoredKeypair = Ed25519Keypair.fromSecretKey(new Uint8Array(keypairData));
+        setKeypair(restoredKeypair);
+        setAddress(restoredKeypair.getPublicKey().toSuiAddress());
+        fetchBalance(restoredKeypair.getPublicKey().toSuiAddress());
+      } catch (error) {
+        console.error('Error restoring wallet:', error);
+        localStorage.removeItem('sui_wallet_keypair');
+      }
+    }
+  }, []);
+
+  const createNewWallet = () => {
+    try {
+      const newKeypair = new Ed25519Keypair();
+      const newAddress = newKeypair.getPublicKey().toSuiAddress();
+      
+      // Save to localStorage (in production, use more secure storage)
+      localStorage.setItem('sui_wallet_keypair', JSON.stringify(Array.from(newKeypair.getSecretKey())));
+      
+      setKeypair(newKeypair);
+      setAddress(newAddress);
+      setShowCreateWallet(false);
+      
+      // Generate mnemonic for backup (simplified version)
+      const mnemonic = generateSimpleMnemonic();
+      setGeneratedMnemonic(mnemonic);
+      setShowMnemonic(true);
+      
+      setSuccess('Wallet created successfully!');
+      setTimeout(() => setSuccess(''), 3000);
+      
+    } catch (error) {
+      setError('Failed to create wallet');
+      setTimeout(() => setError(''), 3000);
+    }
+  };
+
+  const generateSimpleMnemonic = () => {
+    // Simplified mnemonic generation (in production, use proper BIP39)
+    const words = ['apple', 'banana', 'cherry', 'date', 'elderberry', 'fig', 'grape', 'honey', 'ice', 'juice', 'kiwi', 'lemon'];
+    return Array.from({length: 12}, () => words[Math.floor(Math.random() * words.length)]).join(' ');
+  };
+
+  const fetchBalance = async (walletAddress: string) => {
+    if (!walletAddress) return;
+    
+    setLoading(true);
+    try {
+      const balance = await client.getBalance({
+        owner: walletAddress,
+      });
+      
+      // Convert from MIST to SUI (1 SUI = 1,000,000,000 MIST)
+      const suiAmount = parseInt(balance.totalBalance) / 1_000_000_000;
+      setSuiBalance(suiAmount);
+      
+      // Fetch transaction history
+      const txHistory = await client.queryTransactionBlocks({
+        filter: {
+          FromOrToAddress: {
+            addr: walletAddress,
+          },
+        },
+        options: {
+          showEffects: true,
+          showBalanceChanges: true,
+        },
+        limit: 10,
+      });
+      
+      // Process transactions
+      const processedTxs = txHistory.data.map((tx) => ({
+        description: tx.effects?.status?.status === 'success' ? 'Transaction Successful' : 'Transaction Failed',
+        date: new Date(parseInt(tx.timestampMs || '0')).toLocaleDateString(),
+        amount: tx.balanceChanges?.[0]?.amount || '0',
+        currency: 'SUI',
+        digest: tx.digest,
+      }));
+      
+      setTransactions(processedTxs);
+      
+    } catch (error) {
+      console.error('Error fetching balance:', error);
+      setError('Failed to fetch balance');
+      setTimeout(() => setError(''), 3000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refreshBalance = () => {
+    if (address) {
+      fetchBalance(address);
+    }
+  };
+
+  const copyAddress = () => {
+    if (address) {
+      navigator.clipboard.writeText(address);
+      setSuccess('Address copied to clipboard!');
+      setTimeout(() => setSuccess(''), 3000);
+    }
+  };
 
   const toggleBalanceVisibility = () => {
     setBalanceVisible(!balanceVisible);
@@ -57,17 +189,123 @@ export default function CryptoWalletUI() {
     setCurrentView(tab.toLowerCase());
   };
 
-  // Calculate total balance in USD
-  const totalBalance = suiBalance + dollarBalance;
+  // Calculate total balance in USD (mock conversion rate)
+  const mockSuiToUSD = 2.5; // Mock conversion rate
+  const totalBalance = (suiBalance * mockSuiToUSD) + dollarBalance;
 
   const menuItems = [
     { icon: User, label: 'Profile', action: () => console.log('Profile clicked') },
     { icon: Settings, label: 'Settings', action: () => console.log('Settings clicked') },
-    { icon: Shield, label: 'Security', action: () => console.log('Security clicked') },
+    { icon: Shield, label: 'Security', action: () => setShowMnemonic(true) },
     { icon: CreditCard, label: 'Payment Methods', action: () => console.log('Payment Methods clicked') },
     { icon: HelpCircle, label: 'Help & Support', action: () => console.log('Help clicked') },
-    { icon: LogOut, label: 'Logout', action: () => console.log('Logout clicked') },
+    { icon: LogOut, label: 'Logout', action: () => {
+      localStorage.removeItem('sui_wallet_keypair');
+      setKeypair(null);
+      setAddress('');
+      setSuiBalance(0);
+      setTransactions([]);
+    }},
   ];
+
+  // If no wallet exists, show wallet creation options
+  if (!keypair) {
+    return (
+      <div className="max-w-sm mx-auto bg-gray-900 min-h-screen text-white flex flex-col justify-center items-center p-6">
+        <OctopusIcon className="w-20 h-20 text-orange-500 mb-8" />
+        <h1 className="text-3xl font-light text-gray-200 mb-2">IkaWallet</h1>
+        <p className="text-gray-400 text-center mb-12">Your gateway to the Sui ecosystem</p>
+        
+        {!showCreateWallet && !showImportWallet && (
+          <div className="w-full space-y-4">
+            <button
+              onClick={() => setShowCreateWallet(true)}
+              className="w-full bg-orange-500 hover:bg-orange-600 text-white py-4 rounded-xl font-medium transition-colors"
+            >
+              Create New Wallet
+            </button>
+            <button
+              onClick={() => setShowImportWallet(true)}
+              className="w-full bg-gray-700 hover:bg-gray-600 text-white py-4 rounded-xl font-medium transition-colors"
+            >
+              Import Existing Wallet
+            </button>
+          </div>
+        )}
+
+        {showCreateWallet && (
+          <div className="w-full">
+            <div className="bg-gray-800 rounded-xl p-6 mb-4">
+              <h3 className="text-lg font-medium mb-4">Create New Wallet</h3>
+              <p className="text-gray-400 text-sm mb-6">
+                This will generate a new wallet with a unique address and private key.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={createNewWallet}
+                  className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-medium transition-colors"
+                >
+                  Generate Wallet
+                </button>
+                <button
+                  onClick={() => setShowCreateWallet(false)}
+                  className="flex-1 bg-gray-600 hover:bg-gray-500 text-white py-3 rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showImportWallet && (
+          <div className="w-full">
+            <div className="bg-gray-800 rounded-xl p-6 mb-4">
+              <h3 className="text-lg font-medium mb-4">Import Wallet</h3>
+              <p className="text-gray-400 text-sm mb-4">
+                Enter your mnemonic phrase to restore your wallet.
+              </p>
+              <textarea
+                value={mnemonicInput}
+                onChange={(e) => setMnemonicInput(e.target.value)}
+                placeholder="Enter your 12-word mnemonic phrase..."
+                className="w-full bg-gray-700 text-white p-3 rounded-lg mb-4 h-24 resize-none"
+              />
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    // Simplified import (in production, implement proper mnemonic restoration)
+                    setError('Import functionality coming soon');
+                    setTimeout(() => setError(''), 3000);
+                  }}
+                  className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-medium transition-colors"
+                >
+                  Import
+                </button>
+                <button
+                  onClick={() => setShowImportWallet(false)}
+                  className="flex-1 bg-gray-600 hover:bg-gray-500 text-white py-3 rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="w-full bg-red-900 border border-red-700 text-red-200 p-3 rounded-lg mt-4">
+            {error}
+          </div>
+        )}
+        {success && (
+          <div className="w-full bg-green-900 border border-green-700 text-green-200 p-3 rounded-lg mt-4">
+            {success}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const renderContent = () => {
     switch(currentView) {
@@ -84,18 +322,42 @@ export default function CryptoWalletUI() {
       default:
         return (
           <>
+            {/* Wallet Address Section */}
+            <div className="mx-4 mb-4">
+              <div className="bg-gray-800 rounded-xl p-4">
+                <div className="flex justify-between items-center mb-2">
+                  <h3 className="text-sm font-medium text-gray-400">Wallet Address</h3>
+                  <button onClick={copyAddress} className="text-orange-500 hover:text-orange-400">
+                    <Copy className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-xs text-gray-300 font-mono break-all">
+                  {address}
+                </p>
+              </div>
+            </div>
+
             {/* My Accounts Section */}
             <div className="mx-4 mb-6">
               <div className="bg-gray-800 rounded-xl p-4">
                 <div className="flex justify-between items-center mb-4">
                   <h2 className="text-lg font-medium italic text-gray-200">My Accounts</h2>
-                  <button onClick={toggleBalanceVisibility}>
-                    {balanceVisible ? (
-                      <Eye className="w-5 h-5 text-gray-400" />
-                    ) : (
-                      <EyeOff className="w-5 h-5 text-gray-400" />
-                    )}
-                  </button>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={refreshBalance}
+                      disabled={loading}
+                      className="text-gray-400 hover:text-gray-300 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+                    </button>
+                    <button onClick={toggleBalanceVisibility}>
+                      {balanceVisible ? (
+                        <Eye className="w-5 h-5 text-gray-400" />
+                      ) : (
+                        <EyeOff className="w-5 h-5 text-gray-400" />
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 {/* SUI Account */}
@@ -107,9 +369,11 @@ export default function CryptoWalletUI() {
                     <span className="font-medium text-gray-200">SUI</span>
                   </div>
                   <div className="text-right">
-                    <div className="text-sm text-gray-300">{suiBalance.toFixed(2)} SUI</div>
+                    <div className="text-sm text-gray-300">
+                      {balanceVisible ? `${suiBalance.toFixed(4)} SUI` : '****'}
+                    </div>
                     <div className="text-xs text-gray-500">
-                      {balanceVisible ? `~ ${suiBalance.toFixed(2)}` : '****'}
+                      {balanceVisible ? `~ $${(suiBalance * mockSuiToUSD).toFixed(2)}` : '****'}
                     </div>
                   </div>
                 </div>
@@ -129,7 +393,7 @@ export default function CryptoWalletUI() {
                   </div>
                   <div className="text-right">
                     <div className="text-sm text-gray-200">
-                      {balanceVisible ? `${dollarBalance.toFixed(2)}` : '****'}
+                      {balanceVisible ? `$${dollarBalance.toFixed(2)}` : '****'}
                     </div>
                   </div>
                 </div>
@@ -204,6 +468,11 @@ export default function CryptoWalletUI() {
                           <div className="text-xs text-gray-500">
                             {transaction.date}
                           </div>
+                          {transaction.digest && (
+                            <div className="text-xs text-gray-400 font-mono">
+                              {transaction.digest.substring(0, 16)}...
+                            </div>
+                          )}
                         </div>
                         <div className="text-right">
                           <div className="text-sm text-gray-300">{transaction.amount}</div>
@@ -246,6 +515,39 @@ export default function CryptoWalletUI() {
           <Menu className="w-6 h-6 text-orange-500" />
         </button>
       </div>
+
+      {/* Status Messages */}
+      {error && (
+        <div className="mx-4 mb-4 bg-red-900 border border-red-700 text-red-200 p-3 rounded-lg text-sm">
+          {error}
+        </div>
+      )}
+      {success && (
+        <div className="mx-4 mb-4 bg-green-900 border border-green-700 text-green-200 p-3 rounded-lg text-sm">
+          {success}
+        </div>
+      )}
+
+      {/* Mnemonic Display Modal */}
+      {showMnemonic && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-gray-800 rounded-xl p-6 max-w-sm w-full">
+            <h3 className="text-lg font-medium text-white mb-4">Backup Phrase</h3>
+            <p className="text-gray-400 text-sm mb-4">
+              Save this phrase safely. You'll need it to restore your wallet.
+            </p>
+            <div className="bg-gray-700 p-4 rounded-lg mb-4">
+              <p className="text-white text-sm font-mono">{generatedMnemonic}</p>
+            </div>
+            <button
+              onClick={() => setShowMnemonic(false)}
+              className="w-full bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-medium transition-colors"
+            >
+              I've Saved It
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Hamburger Menu Overlay */}
       {menuOpen && (

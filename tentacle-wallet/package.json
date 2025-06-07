@@ -9,6 +9,9 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@mysten/sui": "^1.30.5",
+    "@mysten/wallet-adapter-react": "^11.0.0",
+    "@mysten/wallet-adapter-wallet-standard": "^0.8.0",
     "lucide-react": "^0.513.0",
     "next": "15.3.3",
     "react": "^19.0.0",
