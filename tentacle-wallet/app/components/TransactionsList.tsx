@@ -1,32 +1,14 @@
 import React from 'react';
-import { ArrowUpDown } from 'lucide-react';
-
-interface Transaction {
-  description: string;
-  date: string;
-  amount: string;
-  currency: string;
-}
+import mockTransactions, { Transaction } from '../data/mockTransactions';
 
 interface TransactionsListProps {
-  transactions: Transaction[];
+  transactions?: Transaction[];
 }
 
-const TransactionsList: React.FC<TransactionsListProps> = ({ transactions }) => {
-  if (transactions.length === 0) {
-    return (
-      <div className="mx-4 mb-6">
-        <div className="bg-gray-800 rounded-xl p-8 text-center">
-          <div className="w-16 h-16 bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-4">
-            <ArrowUpDown className="w-8 h-8 text-gray-400" />
-          </div>
-          <h3 className="text-lg font-medium text-gray-300 mb-2">No Transactions</h3>
-          <p className="text-gray-400 text-sm">
-            Your transaction history will appear here once you start making payments.
-          </p>
-        </div>
-      </div>
-    );
+const TransactionsList: React.FC<TransactionsListProps> = ({ transactions = mockTransactions }) => {
+  if (!transactions || transactions.length === 0) {
+    // Instead of showing no transactions, show the mock data
+    transactions = mockTransactions;
   }
 
   return (
